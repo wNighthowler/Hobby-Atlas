@@ -1,8 +1,10 @@
-import { App, ItemView, Notice, Plugin, TFile, WorkspaceLeaf, normalizePath, setIcon } from 'obsidian';
+import { App, ItemView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, normalizePath, setIcon } from 'obsidian';
 
 export const VIEW_TYPE_HOBBY_ATLAS = 'hobby-atlas-view';
 const HOBBY_FOLDER = 'Hobbies';
 const TODOS_FOLDER = 'Todos';
+type HobbyAtlasSettings = { rootFolder: string };
+const DEFAULT_SETTINGS: HobbyAtlasSettings = { rootFolder: HOBBY_FOLDER };
 
 type Position = { x: number; y: number };
 type TodoNode = { id: string; text: string; done: boolean; path: string; x: number; y: number };
@@ -11,13 +13,33 @@ type ViewState = { panX: number; panY: number; zoom: number; positions: Record<s
 const DEFAULT_STATE: ViewState = { panX: 0, panY: 0, zoom: 1, positions: {} };
 
 export default class HobbyAtlasPlugin extends Plugin {
-  data: { viewState?: ViewState } = {};
+  data: { viewState?: ViewState; settings?: Partial<HobbyAtlasSettings> } = {};
+  settings: HobbyAtlasSettings = { ...DEFAULT_SETTINGS };
 
   async onload() {
     this.data = (await this.loadData()) ?? {};
-    this.registerView(VIEW_TYPE_HOBBY_ATLAS, (leaf) => new HobbyAtlasView(leaf, this.app));
+    this.settings = { ...DEFAULT_SETTINGS, ...this.data.settings, rootFolder: this.normalizeRootFolder(this.data.settings?.rootFolder ?? DEFAULT_SETTINGS.rootFolder) };
+    this.addSettingTab(new HobbyAtlasSettingTab(this.app, this));
+    this.registerView(VIEW_TYPE_HOBBY_ATLAS, (leaf) => new HobbyAtlasView(leaf, this.app, this));
     this.addRibbonIcon('git-branch', '打开 Hobby Atlas 白板', () => this.activateView());
     this.addCommand({ id: 'open-hobby-atlas', name: '打开 Hobby Atlas 白板', callback: () => this.activateView() });
+  }
+
+  normalizeRootFolder(value: string) {
+    const normalized = normalizePath(value.trim().replace(/^\/+|\/+$/g, ''));
+    return normalized && normalized !== '.' ? normalized : DEFAULT_SETTINGS.rootFolder;
+  }
+
+  async saveSettings() {
+    this.data.settings = this.settings;
+    await this.saveData(this.data);
+  }
+
+  async refreshViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOBBY_ATLAS)) {
+      const view = leaf.view;
+      if (view instanceof HobbyAtlasView) await view.refresh();
+    }
   }
 
   async activateView() {
@@ -29,8 +51,34 @@ export default class HobbyAtlasPlugin extends Plugin {
   }
 }
 
+class HobbyAtlasSettingTab extends PluginSettingTab {
+  plugin: HobbyAtlasPlugin;
+
+  constructor(app: App, plugin: HobbyAtlasPlugin) { super(app, plugin); this.plugin = plugin; }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl('h2', { text: 'Hobby Atlas 设置' });
+    new Setting(containerEl)
+      .setName('根节点文件夹')
+      .setDesc('Hobby 文档和 Todo 文档都会保存在这里。支持多级路径，例如：兴趣/Hobbies。已有文档不会自动移动。')
+      .addText((text) => text
+        .setPlaceholder(DEFAULT_SETTINGS.rootFolder)
+        .setValue(this.plugin.settings.rootFolder)
+        .onChange(async (value) => {
+          const next = this.plugin.normalizeRootFolder(value);
+          if (next === this.plugin.settings.rootFolder) return;
+          this.plugin.settings.rootFolder = next;
+          await this.plugin.saveSettings();
+          await this.plugin.refreshViews();
+        }));
+  }
+}
+
 class HobbyAtlasView extends ItemView {
   private appRef: App;
+  private pluginRef: HobbyAtlasPlugin;
   private canvasEl!: HTMLElement;
   private worldEl!: HTMLElement;
   private edgesEl!: SVGSVGElement;
@@ -43,7 +91,7 @@ class HobbyAtlasView extends ItemView {
   private refreshTimer: number | null = null;
   private refreshGeneration = 0;
 
-  constructor(leaf: WorkspaceLeaf, app: App) { super(leaf); this.appRef = app; }
+  constructor(leaf: WorkspaceLeaf, app: App, plugin: HobbyAtlasPlugin) { super(leaf); this.appRef = app; this.pluginRef = plugin; }
   getViewType() { return VIEW_TYPE_HOBBY_ATLAS; }
   getDisplayText() { return 'Hobby Atlas'; }
 
@@ -96,7 +144,7 @@ class HobbyAtlasView extends ItemView {
     this.registerEvent(this.appRef.vault.on('rename', refresh));
   }
 
-  private async refresh() {
+  async refresh() {
     if (!this.worldEl) return;
     const generation = ++this.refreshGeneration;
     const hobbies = await this.readHobbies();
@@ -195,12 +243,12 @@ class HobbyAtlasView extends ItemView {
   }
 
   private async readHobbies(): Promise<HobbyNode[]> {
-    if (!this.appRef.vault.getAbstractFileByPath(HOBBY_FOLDER)) await this.appRef.vault.createFolder(HOBBY_FOLDER);
+    const rootFolder = this.pluginRef.settings.rootFolder;
     // 兼容第一版、手动整理过的目录，以及旧版导入到 vault 根目录的 Hobby 文档。
     const files = this.appRef.vault.getMarkdownFiles().filter((file) => {
       if (file.path.includes(`/${TODOS_FOLDER}/`)) return false;
-      if (file.path.startsWith(`${HOBBY_FOLDER}/`)) {
-        const relative = file.path.slice(`${HOBBY_FOLDER}/`.length).split('/');
+      if (file.path.startsWith(`${rootFolder}/`)) {
+        const relative = file.path.slice(`${rootFolder}/`.length).split('/');
         return relative.length === 1 || relative.length === 2;
       }
       return file.path.split('/').length === 1;
@@ -209,14 +257,14 @@ class HobbyAtlasView extends ItemView {
     const seen = new Set<string>();
     for (const file of files) {
       const content = await this.appRef.vault.read(file);
-      const relative = file.path.startsWith(`${HOBBY_FOLDER}/`) ? file.path.slice(`${HOBBY_FOLDER}/`.length).split('/') : [];
+      const relative = file.path.startsWith(`${rootFolder}/`) ? file.path.slice(`${rootFolder}/`.length).split('/') : [];
       const name = relative.length > 1 ? relative[0] : file.basename;
       const hasTodoSection = /^##\s+Todos\s*$/im.test(content) || /^\s*-\s*\[[ xX]\]\s+.+$/m.test(content);
       const hasHobbyFrontmatter = /^type:\s*hobby\s*$/im.test(content);
       const childName = relative.length === 2 ? relative[1].replace(/\.md$/i, '').toLowerCase() : '';
       const canonicalChild = relative.length === 2 && ['index', 'readme', relative[0].toLowerCase()].includes(childName);
       if (relative.length === 2 && !canonicalChild && !hasTodoSection && !hasHobbyFrontmatter) continue;
-      if (!file.path.startsWith(`${HOBBY_FOLDER}/`) && !hasTodoSection && !hasHobbyFrontmatter) continue;
+      if (!file.path.startsWith(`${rootFolder}/`) && !hasTodoSection && !hasHobbyFrontmatter) continue;
       const identity = name.normalize('NFKC').trim().toLocaleLowerCase();
       if (seen.has(identity)) continue;
       seen.add(identity);
@@ -233,7 +281,7 @@ class HobbyAtlasView extends ItemView {
       const done = match[1].toLowerCase() === 'x';
       const raw = match[2];
       const link = raw.match(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/);
-      const target = link?.[1] ? this.resolveTodoTarget(hobbyName, link[1]) : `${HOBBY_FOLDER}/${hobbyName}/${TODOS_FOLDER}/${this.fileSafeName(raw)}.md`;
+      const target = link?.[1] ? this.resolveTodoTarget(hobbyName, link[1]) : `${this.pluginRef.settings.rootFolder}/${hobbyName}/${TODOS_FOLDER}/${this.fileSafeName(raw)}.md`;
       const text = (link?.[2] ?? link?.[1]?.split('/').pop() ?? raw).replace(/\.md$/, '').trim();
       const path = normalizePath(target.endsWith('.md') ? target : `${target}.md`);
       todos.push({ id: path, text, done, path, x: 0, y: 0 });
@@ -244,7 +292,7 @@ class HobbyAtlasView extends ItemView {
   private async createHobby() {
     const name = await this.askForText('新建 Hobby', '例如：摄影、植物、音乐', '创建');
     if (!name) return;
-    const path = normalizePath(`${HOBBY_FOLDER}/${name}.md`);
+    const path = normalizePath(`${this.pluginRef.settings.rootFolder}/${name}.md`);
     const existing = await this.readHobbies();
     if (this.appRef.vault.getAbstractFileByPath(path) || existing.some((hobby) => hobby.name.normalize('NFKC').trim().toLocaleLowerCase() === name.normalize('NFKC').trim().toLocaleLowerCase())) { new Notice('这个 Hobby 已经存在'); return; }
     await this.appRef.vault.create(path, `# ${name}\n\n## 简介\n\n\n## Todos\n\n`);
@@ -263,9 +311,9 @@ class HobbyAtlasView extends ItemView {
     if (!details) return;
     const hobby = hobbies.find((item) => item.name === details.hobbyName);
     if (!hobby) return;
-    const path = normalizePath(`${HOBBY_FOLDER}/${hobby.name}/${TODOS_FOLDER}/${this.fileSafeName(details.text)}.md`);
+    const path = normalizePath(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}/${this.fileSafeName(details.text)}.md`);
     if (this.appRef.vault.getAbstractFileByPath(path)) { new Notice('这个 Todo 文档已经存在'); return; }
-    await this.ensureFolder(`${HOBBY_FOLDER}/${hobby.name}/${TODOS_FOLDER}`);
+    await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`);
     await this.appRef.vault.create(path, this.todoMarkdown(hobby, details.text, false));
     const updated = [...hobby.todos, { id: path, text: details.text, done: false, path, x: 0, y: 0 }];
     await this.writeHobbyTodos(hobby, updated);
@@ -282,11 +330,11 @@ class HobbyAtlasView extends ItemView {
   private async editTodo(hobby: HobbyNode, todo: TodoNode) {
     const text = await this.askForText('编辑 Todo', todo.text, '保存');
     if (!text || text === todo.text) return;
-    const nextPath = normalizePath(`${HOBBY_FOLDER}/${hobby.name}/${TODOS_FOLDER}/${this.fileSafeName(text)}.md`);
+    const nextPath = normalizePath(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}/${this.fileSafeName(text)}.md`);
     if (nextPath !== todo.path && this.appRef.vault.getAbstractFileByPath(nextPath)) { new Notice('这个 Todo 文档已经存在'); return; }
     const oldFile = this.appRef.vault.getAbstractFileByPath(todo.path);
     if (oldFile instanceof TFile && oldFile.path !== nextPath) await this.appRef.vault.rename(oldFile, nextPath);
-    else if (!oldFile) { await this.ensureFolder(`${HOBBY_FOLDER}/${hobby.name}/${TODOS_FOLDER}`); await this.appRef.vault.create(nextPath, this.todoMarkdown(hobby, text, todo.done)); }
+    else if (!oldFile) { await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`); await this.appRef.vault.create(nextPath, this.todoMarkdown(hobby, text, todo.done)); }
     todo.text = text; todo.path = nextPath; todo.id = nextPath;
     await this.updateTodoDocument(todo, hobby); await this.writeHobbyTodos(hobby, hobby.todos); await this.refresh();
   }
@@ -304,7 +352,7 @@ class HobbyAtlasView extends ItemView {
     const file = this.appRef.vault.getAbstractFileByPath(todo.path);
     const markdown = this.todoMarkdown(hobby, todo.text, todo.done);
     if (file instanceof TFile) await this.appRef.vault.modify(file, markdown);
-    else { await this.ensureFolder(`${HOBBY_FOLDER}/${hobby.name}/${TODOS_FOLDER}`); await this.appRef.vault.create(todo.path, markdown); }
+    else { await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`); await this.appRef.vault.create(todo.path, markdown); }
   }
 
   private async writeHobbyTodos(hobby: HobbyNode, todos: TodoNode[]) {
@@ -371,14 +419,16 @@ class HobbyAtlasView extends ItemView {
     return { x: hobby.x + directionX * 235, y: hobby.y + directionY * 235 };
   }
   private resolveTodoTarget(hobbyName: string, target: string) {
-    if (target.startsWith(`${HOBBY_FOLDER}/`)) return target;
-    if (target.startsWith(`${hobbyName}/`)) return `${HOBBY_FOLDER}/${target}`;
-    return `${HOBBY_FOLDER}/${hobbyName}/${TODOS_FOLDER}/${target}`;
+    const rootFolder = this.pluginRef.settings.rootFolder;
+    if (target.startsWith(`${rootFolder}/`)) return target;
+    if (target.startsWith(`${HOBBY_FOLDER}/`)) return `${rootFolder}/${target.slice(`${HOBBY_FOLDER}/`.length)}`;
+    if (target.startsWith(`${hobbyName}/`)) return `${rootFolder}/${target}`;
+    return `${rootFolder}/${hobbyName}/${TODOS_FOLDER}/${target}`;
   }
   private async openDocument(path: string) { await this.appRef.workspace.openLinkText(path.replace(/\.md$/, ''), '', true); }
   private async openTodoDocument(hobby: HobbyNode, todo: TodoNode) {
     if (!this.appRef.vault.getAbstractFileByPath(todo.path)) {
-      await this.ensureFolder(`${HOBBY_FOLDER}/${hobby.name}/${TODOS_FOLDER}`);
+      await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`);
       await this.appRef.vault.create(todo.path, this.todoMarkdown(hobby, todo.text, todo.done));
     }
     await this.openDocument(todo.path);
