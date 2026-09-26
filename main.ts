@@ -244,27 +244,24 @@ class HobbyAtlasView extends ItemView {
 
   private async readHobbies(): Promise<HobbyNode[]> {
     const rootFolder = this.pluginRef.settings.rootFolder;
-    // 兼容第一版、手动整理过的目录，以及旧版导入到 vault 根目录的 Hobby 文档。
+    // 只读取设置指定根目录下的文档，避免把 Vault 其他位置的笔记误识别为 Hobby。
     const files = this.appRef.vault.getMarkdownFiles().filter((file) => {
+      if (!file.path.startsWith(`${rootFolder}/`)) return false;
       if (file.path.includes(`/${TODOS_FOLDER}/`)) return false;
-      if (file.path.startsWith(`${rootFolder}/`)) {
-        const relative = file.path.slice(`${rootFolder}/`.length).split('/');
-        return relative.length === 1 || relative.length === 2;
-      }
-      return file.path.split('/').length === 1;
+      const relative = file.path.slice(`${rootFolder}/`.length).split('/');
+      return relative.length === 1 || relative.length === 2;
     });
     const hobbies: HobbyNode[] = [];
     const seen = new Set<string>();
     for (const file of files) {
       const content = await this.appRef.vault.read(file);
-      const relative = file.path.startsWith(`${rootFolder}/`) ? file.path.slice(`${rootFolder}/`.length).split('/') : [];
+      const relative = file.path.slice(`${rootFolder}/`.length).split('/');
       const name = relative.length > 1 ? relative[0] : file.basename;
       const hasTodoSection = /^##\s+Todos\s*$/im.test(content) || /^\s*-\s*\[[ xX]\]\s+.+$/m.test(content);
       const hasHobbyFrontmatter = /^type:\s*hobby\s*$/im.test(content);
       const childName = relative.length === 2 ? relative[1].replace(/\.md$/i, '').toLowerCase() : '';
       const canonicalChild = relative.length === 2 && ['index', 'readme', relative[0].toLowerCase()].includes(childName);
       if (relative.length === 2 && !canonicalChild && !hasTodoSection && !hasHobbyFrontmatter) continue;
-      if (!file.path.startsWith(`${rootFolder}/`) && !hasTodoSection && !hasHobbyFrontmatter) continue;
       const identity = name.normalize('NFKC').trim().toLocaleLowerCase();
       if (seen.has(identity)) continue;
       seen.add(identity);
