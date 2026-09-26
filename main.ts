@@ -1,10 +1,10 @@
-import { App, ItemView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, normalizePath, setIcon } from 'obsidian';
+import { App, ItemView, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf, normalizePath, setIcon } from 'obsidian';
 
 export const VIEW_TYPE_HOBBY_ATLAS = 'hobby-atlas-view';
 const HOBBY_FOLDER = 'Hobbies';
 const TODOS_FOLDER = 'Todos';
-type HobbyAtlasSettings = { rootFolder: string };
-const DEFAULT_SETTINGS: HobbyAtlasSettings = { rootFolder: HOBBY_FOLDER };
+type HobbyAtlasSettings = { rootFolder: string; hobbyFontFamily: string; hobbyFontSize: number; todoFontFamily: string; todoFontSize: number };
+const DEFAULT_SETTINGS: HobbyAtlasSettings = { rootFolder: HOBBY_FOLDER, hobbyFontFamily: 'Excalifont', hobbyFontSize: 14, todoFontFamily: 'Excalifont', todoFontSize: 10 };
 
 type Position = { x: number; y: number };
 type TodoNode = { id: string; text: string; done: boolean; path: string; x: number; y: number };
@@ -18,7 +18,15 @@ export default class HobbyAtlasPlugin extends Plugin {
 
   async onload() {
     this.data = (await this.loadData()) ?? {};
-    this.settings = { ...DEFAULT_SETTINGS, ...this.data.settings, rootFolder: this.normalizeRootFolder(this.data.settings?.rootFolder ?? DEFAULT_SETTINGS.rootFolder) };
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...this.data.settings,
+      rootFolder: this.normalizeRootFolder(this.data.settings?.rootFolder ?? DEFAULT_SETTINGS.rootFolder),
+      hobbyFontFamily: this.normalizeFontFamily(this.data.settings?.hobbyFontFamily, DEFAULT_SETTINGS.hobbyFontFamily),
+      hobbyFontSize: this.normalizeFontSize(this.data.settings?.hobbyFontSize, DEFAULT_SETTINGS.hobbyFontSize),
+      todoFontFamily: this.normalizeFontFamily(this.data.settings?.todoFontFamily, DEFAULT_SETTINGS.todoFontFamily),
+      todoFontSize: this.normalizeFontSize(this.data.settings?.todoFontSize, DEFAULT_SETTINGS.todoFontSize),
+    };
     this.addSettingTab(new HobbyAtlasSettingTab(this.app, this));
     this.registerView(VIEW_TYPE_HOBBY_ATLAS, (leaf) => new HobbyAtlasView(leaf, this.app, this));
     this.addRibbonIcon('git-branch', '打开 Hobby Atlas 白板', () => this.activateView());
@@ -30,6 +38,11 @@ export default class HobbyAtlasPlugin extends Plugin {
     return normalized && normalized !== '.' ? normalized : DEFAULT_SETTINGS.rootFolder;
   }
 
+  normalizeFontFamily(value: string | undefined, fallback: string) { return value?.trim() || fallback; }
+  normalizeFontSize(value: number | undefined, fallback: number) {
+    return Number.isFinite(value) ? Math.max(8, Math.min(40, Number(value))) : fallback;
+  }
+
   async saveSettings() {
     this.data.settings = this.settings;
     await this.saveData(this.data);
@@ -38,7 +51,7 @@ export default class HobbyAtlasPlugin extends Plugin {
   async refreshViews() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOBBY_ATLAS)) {
       const view = leaf.view;
-      if (view instanceof HobbyAtlasView) await view.refresh();
+      if (view instanceof HobbyAtlasView) { view.applyCustomStyles(); await view.refresh(); }
     }
   }
 
@@ -73,6 +86,32 @@ class HobbyAtlasSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           await this.plugin.refreshViews();
         }));
+    containerEl.createEl('h3', { text: '开发者自定义' });
+    containerEl.createEl('p', { text: '调整白板中 Hobby 标题和 Todo 文本的字体与字号。字体名称支持 CSS 字体名或字体回退列表。', cls: 'setting-item-description' });
+    new Setting(containerEl)
+      .setName('Hobby 字体')
+      .addText((text) => text.setValue(this.plugin.settings.hobbyFontFamily).onChange(async (value) => {
+        this.plugin.settings.hobbyFontFamily = this.plugin.normalizeFontFamily(value, DEFAULT_SETTINGS.hobbyFontFamily);
+        await this.plugin.saveSettings(); await this.plugin.refreshViews();
+      }));
+    new Setting(containerEl)
+      .setName('Hobby 字号')
+      .addText((text) => { text.inputEl.type = 'number'; text.setValue(String(this.plugin.settings.hobbyFontSize)).onChange(async (value) => {
+        this.plugin.settings.hobbyFontSize = this.plugin.normalizeFontSize(Number(value), DEFAULT_SETTINGS.hobbyFontSize);
+        await this.plugin.saveSettings(); await this.plugin.refreshViews();
+      }); });
+    new Setting(containerEl)
+      .setName('Todo 字体')
+      .addText((text) => text.setValue(this.plugin.settings.todoFontFamily).onChange(async (value) => {
+        this.plugin.settings.todoFontFamily = this.plugin.normalizeFontFamily(value, DEFAULT_SETTINGS.todoFontFamily);
+        await this.plugin.saveSettings(); await this.plugin.refreshViews();
+      }));
+    new Setting(containerEl)
+      .setName('Todo 字号')
+      .addText((text) => { text.inputEl.type = 'number'; text.setValue(String(this.plugin.settings.todoFontSize)).onChange(async (value) => {
+        this.plugin.settings.todoFontSize = this.plugin.normalizeFontSize(Number(value), DEFAULT_SETTINGS.todoFontSize);
+        await this.plugin.saveSettings(); await this.plugin.refreshViews();
+      }); });
   }
 }
 
@@ -90,6 +129,7 @@ class HobbyAtlasView extends ItemView {
   private suppressClick = false;
   private refreshTimer: number | null = null;
   private refreshGeneration = 0;
+  private openingTodos = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, app: App, plugin: HobbyAtlasPlugin) { super(leaf); this.appRef = app; this.pluginRef = plugin; }
   getViewType() { return VIEW_TYPE_HOBBY_ATLAS; }
@@ -100,11 +140,20 @@ class HobbyAtlasView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass('hobby-atlas-view');
     this.renderShell();
+    this.applyCustomStyles();
     this.registerVaultListeners();
     await this.refresh();
   }
 
   async onClose() { await this.saveState(); }
+
+  applyCustomStyles() {
+    if (!this.contentEl) return;
+    this.contentEl.style.setProperty('--hobby-font-family', this.pluginRef.settings.hobbyFontFamily);
+    this.contentEl.style.setProperty('--hobby-font-size', `${this.pluginRef.settings.hobbyFontSize}px`);
+    this.contentEl.style.setProperty('--todo-font-family', this.pluginRef.settings.todoFontFamily);
+    this.contentEl.style.setProperty('--todo-font-size', `${this.pluginRef.settings.todoFontSize}px`);
+  }
 
   private renderShell() {
     const toolbar = this.contentEl.createDiv({ cls: 'hobby-atlas-toolbar' });
@@ -191,10 +240,8 @@ class HobbyAtlasView extends ItemView {
     const head = node.createDiv({ cls: 'hobby-atlas-hobby-head' });
     head.createDiv({ cls: 'hobby-atlas-hobby-glyph', text: this.emojiFor(hobby.name) });
     const label = head.createDiv(); label.createDiv({ text: hobby.name, cls: 'hobby-atlas-hobby-name' }); label.createDiv({ text: `${hobby.todos.filter((todo) => !todo.done).length} 待办 · ${hobby.todos.filter((todo) => todo.done).length} 完成`, cls: 'hobby-atlas-hobby-count' });
-    const add = node.createEl('button', { cls: 'hobby-atlas-node-action', attr: { 'aria-label': `为 ${hobby.name} 新建 Todo` } }); setIcon(add, 'plus'); add.createSpan({ text: 'Todo' }); add.onclick = (event) => { event.stopPropagation(); void this.createTodo(hobby.name); };
-    node.createDiv({ text: '点击打开文档 · 拖动调整位置', cls: 'hobby-atlas-hobby-hint' });
-    node.onclick = () => { if (this.consumeSuppressedClick()) return; void this.openDocument(hobby.path); };
-    node.ondblclick = (event) => { event.stopPropagation(); if (this.consumeSuppressedClick()) return; void this.openDocument(hobby.path); };
+    const open = head.createEl('button', { cls: 'hobby-atlas-open-doc', attr: { 'aria-label': `打开 ${hobby.name} 文档` } }); setIcon(open, 'external-link'); open.onclick = (event) => { event.stopPropagation(); void this.openDocument(hobby.path); };
+    node.onclick = () => { if (this.consumeSuppressedClick()) return; void this.editHobby(hobby); };
     node.onpointerdown = (event) => this.onNodePointerDown(event, `hobby:${hobby.name}`, hobby.x, hobby.y, node);
   }
 
@@ -221,14 +268,18 @@ class HobbyAtlasView extends ItemView {
   }
 
   private renderTodo(hobby: HobbyNode, todo: TodoNode, parent: HTMLElement) {
-    const node = parent.createDiv({ cls: `hobby-atlas-todo ${todo.done ? 'is-completed' : 'is-active'}` });
+    const hasDocument = this.appRef.vault.getAbstractFileByPath(todo.path) instanceof TFile;
+    const node = parent.createDiv({ cls: `hobby-atlas-todo ${todo.done ? 'is-completed' : 'is-active'} ${hasDocument ? 'has-document' : 'no-document'}` });
     const status = node.createEl('button', { cls: 'hobby-atlas-todo-status', attr: { 'aria-label': todo.done ? '标记为未完成' : '标记为完成' } }); status.textContent = todo.done ? '✓' : '○'; status.onclick = (event) => { event.stopPropagation(); void this.toggleTodo(hobby, todo); };
     const body = node.createDiv({ cls: 'hobby-atlas-todo-body' }); body.createDiv({ text: todo.text, cls: 'hobby-atlas-todo-text' }); body.createDiv({ text: todo.done ? '已完成' : `Todo · ${hobby.name}`, cls: 'hobby-atlas-todo-meta' });
     const actions = node.createDiv({ cls: 'hobby-atlas-todo-actions' });
     const edit = actions.createEl('button', { attr: { 'aria-label': '编辑 Todo' } }); setIcon(edit, 'pencil'); edit.onclick = (event) => { event.stopPropagation(); void this.editTodo(hobby, todo); };
     const remove = actions.createEl('button', { attr: { 'aria-label': '删除 Todo' } }); setIcon(remove, 'trash-2'); remove.onclick = (event) => { event.stopPropagation(); void this.deleteTodo(hobby, todo); };
+    if (hasDocument) {
+      const documentIndicator = actions.createSpan({ cls: 'hobby-atlas-todo-document is-present', attr: { 'aria-label': '已有文档', title: '已有文档' } });
+      setIcon(documentIndicator, 'file-text');
+    }
     node.onclick = (event) => { event.stopPropagation(); if (this.consumeSuppressedClick()) return; void this.openTodoDocument(hobby, todo); };
-    node.ondblclick = (event) => { event.stopPropagation(); if (this.consumeSuppressedClick()) return; void this.openTodoDocument(hobby, todo); };
     node.onpointerdown = (event) => event.stopPropagation();
   }
 
@@ -296,6 +347,49 @@ class HobbyAtlasView extends ItemView {
     new Notice(`已创建 Hobby：${name}`); await this.refresh();
   }
 
+  private async editHobby(hobby: HobbyNode) {
+    const name = await this.askForText('编辑 Hobby 标题', hobby.name, '保存');
+    if (!name || name === hobby.name) return;
+    const rootFolder = this.pluginRef.settings.rootFolder;
+    const nextPath = normalizePath(`${rootFolder}/${name}.md`);
+    const existing = await this.readHobbies();
+    if (this.appRef.vault.getAbstractFileByPath(nextPath) || existing.some((item) => item !== hobby && item.name.normalize('NFKC').trim().toLocaleLowerCase() === name.normalize('NFKC').trim().toLocaleLowerCase())) {
+      new Notice('这个 Hobby 已经存在');
+      return;
+    }
+    const file = this.appRef.vault.getAbstractFileByPath(hobby.path);
+    if (!(file instanceof TFile)) { new Notice('找不到 Hobby 文档'); return; }
+    const oldName = hobby.name;
+    const oldFolder = normalizePath(`${rootFolder}/${oldName}`);
+    const nextFolder = normalizePath(`${rootFolder}/${name}`);
+    const oldFolderFile = this.appRef.vault.getAbstractFileByPath(oldFolder);
+    const nextFolderFile = this.appRef.vault.getAbstractFileByPath(nextFolder);
+    if (oldFolderFile && nextFolderFile) { new Notice('目标 Hobby 文件夹已经存在'); return; }
+    await this.appRef.vault.rename(file, nextPath);
+    if (oldFolderFile instanceof TFolder && !nextFolderFile) await this.appRef.vault.rename(oldFolderFile, nextFolder);
+    hobby.name = name;
+    hobby.path = nextPath;
+    hobby.todos = hobby.todos.map((todo) => {
+      if (todo.path.startsWith(`${oldFolder}/`)) todo.path = `${nextFolder}${todo.path.slice(oldFolder.length)}`;
+      todo.id = todo.path;
+      return todo;
+    });
+    const renamedFile = this.appRef.vault.getAbstractFileByPath(nextPath);
+    if (renamedFile instanceof TFile) {
+      const original = await this.appRef.vault.read(renamedFile);
+      const heading = original.replace(/^#\s+.*$/m, `# ${name}`);
+      await this.appRef.vault.modify(renamedFile, heading === original ? `# ${name}\n\n${original}` : heading);
+    }
+    for (const todo of hobby.todos) await this.updateTodoDocument(todo, hobby);
+    await this.writeHobbyTodos(hobby, hobby.todos);
+    const oldHobbyKey = `hobby:${oldName}`;
+    const oldCardKey = `card:${oldName}:main`;
+    if (this.state.positions[oldHobbyKey]) { this.state.positions[`hobby:${name}`] = this.state.positions[oldHobbyKey]; delete this.state.positions[oldHobbyKey]; }
+    if (this.state.positions[oldCardKey]) { this.state.positions[`card:${name}:main`] = this.state.positions[oldCardKey]; delete this.state.positions[oldCardKey]; }
+    new Notice(`已修改 Hobby：${name}`);
+    await this.refresh();
+  }
+
   private async rearrange() {
     Object.keys(this.state.positions).filter((key) => key.startsWith('hobby:') || key.startsWith('card:')).forEach((key) => delete this.state.positions[key]);
     await this.refresh();
@@ -309,12 +403,10 @@ class HobbyAtlasView extends ItemView {
     const hobby = hobbies.find((item) => item.name === details.hobbyName);
     if (!hobby) return;
     const path = normalizePath(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}/${this.fileSafeName(details.text)}.md`);
-    if (this.appRef.vault.getAbstractFileByPath(path)) { new Notice('这个 Todo 文档已经存在'); return; }
-    await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`);
-    await this.appRef.vault.create(path, this.todoMarkdown(hobby, details.text, false));
+    if (hobby.todos.some((todo) => todo.path === path) || this.appRef.vault.getAbstractFileByPath(path)) { new Notice('这个 Todo 已经存在'); return; }
     const updated = [...hobby.todos, { id: path, text: details.text, done: false, path, x: 0, y: 0 }];
     await this.writeHobbyTodos(hobby, updated);
-    new Notice(`已创建 Todo：${details.text}`); await this.refresh();
+    new Notice(`已添加 Todo：${details.text}（首次点击时创建文档）`); await this.refresh();
   }
 
   private async toggleTodo(hobby: HobbyNode, todo: TodoNode) {
@@ -328,10 +420,9 @@ class HobbyAtlasView extends ItemView {
     const text = await this.askForText('编辑 Todo', todo.text, '保存');
     if (!text || text === todo.text) return;
     const nextPath = normalizePath(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}/${this.fileSafeName(text)}.md`);
-    if (nextPath !== todo.path && this.appRef.vault.getAbstractFileByPath(nextPath)) { new Notice('这个 Todo 文档已经存在'); return; }
+    if (nextPath !== todo.path && (hobby.todos.some((item) => item !== todo && item.path === nextPath) || this.appRef.vault.getAbstractFileByPath(nextPath))) { new Notice('这个 Todo 已经存在'); return; }
     const oldFile = this.appRef.vault.getAbstractFileByPath(todo.path);
     if (oldFile instanceof TFile && oldFile.path !== nextPath) await this.appRef.vault.rename(oldFile, nextPath);
-    else if (!oldFile) { await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`); await this.appRef.vault.create(nextPath, this.todoMarkdown(hobby, text, todo.done)); }
     todo.text = text; todo.path = nextPath; todo.id = nextPath;
     await this.updateTodoDocument(todo, hobby); await this.writeHobbyTodos(hobby, hobby.todos); await this.refresh();
   }
@@ -349,7 +440,6 @@ class HobbyAtlasView extends ItemView {
     const file = this.appRef.vault.getAbstractFileByPath(todo.path);
     const markdown = this.todoMarkdown(hobby, todo.text, todo.done);
     if (file instanceof TFile) await this.appRef.vault.modify(file, markdown);
-    else { await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`); await this.appRef.vault.create(todo.path, markdown); }
   }
 
   private async writeHobbyTodos(hobby: HobbyNode, todos: TodoNode[]) {
@@ -357,7 +447,11 @@ class HobbyAtlasView extends ItemView {
     if (!(file instanceof TFile)) return;
     const original = await this.appRef.vault.read(file);
     const before = original.split(/^##\s+Todos\s*$/im)[0].trimEnd();
-    const lines = todos.map((todo) => `- [${todo.done ? 'x' : ' '}] [[${todo.path.replace(/\.md$/, '')}|${todo.text}]]`);
+    const lines = todos.map((todo) => {
+      const file = this.appRef.vault.getAbstractFileByPath(todo.path);
+      const label = file instanceof TFile ? `[[${todo.path.replace(/\.md$/, '')}|${todo.text}]]` : todo.text;
+      return `- [${todo.done ? 'x' : ' '}] ${label}`;
+    });
     await this.appRef.vault.modify(file, `${before}\n\n## Todos\n\n${lines.join('\n')}${lines.length ? '\n' : ''}`);
   }
 
@@ -424,11 +518,20 @@ class HobbyAtlasView extends ItemView {
   }
   private async openDocument(path: string) { await this.appRef.workspace.openLinkText(path.replace(/\.md$/, ''), '', true); }
   private async openTodoDocument(hobby: HobbyNode, todo: TodoNode) {
-    if (!this.appRef.vault.getAbstractFileByPath(todo.path)) {
-      await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`);
-      await this.appRef.vault.create(todo.path, this.todoMarkdown(hobby, todo.text, todo.done));
+    if (this.openingTodos.has(todo.path)) return;
+    this.openingTodos.add(todo.path);
+    try {
+      const existing = this.appRef.vault.getAbstractFileByPath(todo.path);
+      if (!(existing instanceof TFile)) {
+        await this.ensureFolder(`${this.pluginRef.settings.rootFolder}/${hobby.name}/${TODOS_FOLDER}`);
+        const current = this.appRef.vault.getAbstractFileByPath(todo.path);
+        if (!(current instanceof TFile)) await this.appRef.vault.create(todo.path, this.todoMarkdown(hobby, todo.text, todo.done));
+        await this.writeHobbyTodos(hobby, hobby.todos);
+      }
+      await this.openDocument(todo.path);
+    } finally {
+      this.openingTodos.delete(todo.path);
     }
-    await this.openDocument(todo.path);
   }
   private pluginData() { return (this.appRef as App & { plugins: { getPlugin: (id: string) => Plugin & { saveData?: (data: unknown) => Promise<void>; data?: Record<string, unknown> } | null } }).plugins.getPlugin('hobby-atlas'); }
   private async loadState(): Promise<ViewState> { const raw = this.pluginData()?.data as { viewState?: Partial<ViewState> } | undefined; const saved = raw?.viewState; return { panX: saved?.panX ?? DEFAULT_STATE.panX, panY: saved?.panY ?? DEFAULT_STATE.panY, zoom: saved?.zoom ?? DEFAULT_STATE.zoom, positions: saved?.positions ?? {} }; }

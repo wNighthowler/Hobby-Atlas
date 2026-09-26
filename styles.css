@@ -32,32 +32,37 @@
 .hobby-atlas-hobby.is-dragging,.hobby-atlas-todo.is-dragging { cursor:grabbing; border-color:var(--accent); box-shadow:0 14px 34px rgba(51,80,70,.2); }
 .hobby-atlas-hobby-head { display:flex; align-items:center; gap:9px; }
 .hobby-atlas-hobby-glyph { width:39px; height:39px; display:grid; place-items:center; flex:none; border-radius:12px; background:#e1f2eb; font-size:21px; }
-.hobby-atlas-hobby-name { max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:700; }
+.hobby-atlas-hobby-name { max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--hobby-font-family,inherit); font-size:var(--hobby-font-size,14px); font-weight:700; }
 .hobby-atlas-hobby-count { margin-top:4px; color:var(--muted); font-size:10px; }
 .hobby-atlas-hobby-hint { margin-top:9px; color:var(--muted); font-size:9px; }
 .hobby-atlas-node-action { display:inline-flex; align-items:center; gap:4px; margin:10px 0 0; padding:4px 7px; border:1px solid #c9d8d2; border-radius:6px; background:#f7fbf8; color:var(--accent); font-size:10px; cursor:pointer; }
+.hobby-atlas-open-doc { display:grid; place-items:center; flex:none; width:22px; height:22px; margin-left:auto; padding:3px; border:1px solid #c9d8d2; border-radius:6px; background:#f7fbf8; color:var(--accent); cursor:pointer; }
+.hobby-atlas-open-doc svg { width:14px; height:14px; }
 .hobby-atlas-card { width:202px; min-height:78px; padding:10px; border:1px dashed #9fc5b8; border-radius:12px; background:rgba(239,248,244,.98); box-shadow:0 6px 16px rgba(51,80,70,.1); cursor:grab; z-index:3; }
 .hobby-atlas-card:hover { border-color:var(--accent); background:rgba(232,246,239,.99); box-shadow:0 10px 22px rgba(51,80,70,.16); }
 .hobby-atlas-card.is-dragging { cursor:grabbing; border-color:var(--accent); }
 .hobby-atlas-card-head { display:flex; align-items:baseline; gap:7px; padding-bottom:6px; border-bottom:1px solid #d4e8df; }
 .hobby-atlas-card-kicker { color:var(--accent); font-size:9px; letter-spacing:1.5px; }
-.hobby-atlas-card-title { color:#315e52; font-size:13px; font-weight:700; }
+.hobby-atlas-card-title { color:#315e52; font-family:var(--hobby-font-family,inherit); font-size:calc(var(--hobby-font-size,14px) - 1px); font-weight:700; }
 .hobby-atlas-card-add { display:inline-flex; align-items:center; gap:4px; margin-top:8px; padding:4px 7px; border:1px solid #c9d8d2; border-radius:6px; background:#f7fbf8; color:var(--accent); font-size:10px; cursor:pointer; }
 .hobby-atlas-card-list { display:flex; flex-direction:column; gap:4px; margin-top:7px; }
 .hobby-atlas-card-edge { stroke-dasharray:4 6; opacity:.56; }
-.hobby-atlas-todo { position:relative; display:flex; align-items:center; gap:6px; width:184px; min-height:36px; padding:5px 6px; border:1px solid #b9cbc4; border-radius:8px; background:rgba(255,255,255,.99); box-shadow:0 3px 9px rgba(51,80,70,.08); cursor:pointer; transition:.15s; }
+.hobby-atlas-todo { position:relative; display:flex; align-items:center; gap:6px; width:184px; min-height:36px; padding:5px 6px; border:1px solid #b9cbc4; border-radius:8px; background:rgba(255,255,255,.99); box-shadow:0 3px 9px rgba(51,80,70,.08); cursor:pointer; transition:.15s; font-family:var(--todo-font-family,inherit); }
 .hobby-atlas-todo.is-active { z-index:6; }
 .hobby-atlas-todo.is-completed { z-index:1; border-color:#d3d9d6; background:rgba(238,242,240,.9); box-shadow:0 3px 9px rgba(51,80,70,.06); filter:saturate(.35); opacity:.72; }
 .hobby-atlas-todo:hover { border-color:var(--accent); opacity:1; filter:none; }
 .hobby-atlas-todo-status { position:relative; z-index:2; width:18px; height:18px; flex:none; padding:0; border:1px solid #8da69d; border-radius:50%; background:#fff; color:var(--accent); font-size:12px; line-height:1; cursor:pointer; }
 .hobby-atlas-todo.is-completed .hobby-atlas-todo-status { background:#aebcb6; color:#fff; border-color:#aebcb6; }
 .hobby-atlas-todo-body { min-width:0; flex:1; }
-.hobby-atlas-todo-text { position:relative; z-index:2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:600; }
+.hobby-atlas-todo-text { position:relative; z-index:2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--todo-font-size,10px); font-weight:600; }
 .hobby-atlas-todo.is-completed .hobby-atlas-todo-text { text-decoration:line-through; color:#78847f; }
 .hobby-atlas-todo-meta { position:relative; z-index:2; margin-top:2px; color:var(--muted); font-size:8px; }
 .hobby-atlas-todo-actions { position:relative; z-index:2; display:flex; gap:2px; }
 .hobby-atlas-todo-actions button { display:grid; place-items:center; width:18px; height:18px; padding:0; border:0; border-radius:5px; background:transparent; color:#8b9b95; cursor:pointer; }
 .hobby-atlas-todo-actions button:hover { background:#e6f1ec; color:var(--accent); }
+.hobby-atlas-todo-document { display:grid; place-items:center; width:16px; height:18px; margin-left:2px; }
+.hobby-atlas-todo-document svg { width:13px; height:13px; }
+.hobby-atlas-todo-document.is-present { color:#4a9b7a; }
 .hobby-atlas-modal-backdrop { position:absolute; inset:0; z-index:20; display:grid; place-items:center; background:rgba(22,37,43,.25); }
 .hobby-atlas-modal { width:min(370px,calc(100% - 32px)); padding:18px; border:1px solid #cbdad4; border-radius:14px; background:#fff; box-shadow:0 22px 60px rgba(33,60,52,.22); }
 .hobby-atlas-modal h3 { margin:0 0 14px; font-size:16px; }
