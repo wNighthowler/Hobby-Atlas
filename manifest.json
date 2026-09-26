@@ -1,0 +1,9 @@
+{
+  "id": "hobby-atlas",
+  "name": "Hobby Atlas",
+  "version": "0.5.0",
+  "minAppVersion": "1.4.0",
+  "description": "在 Obsidian 无限白板上管理 Hobby 与 Todo 节点，并同步双链 Markdown 文档。",
+  "author": "Hobby Atlas",
+  "isDesktopOnly": false
+}
